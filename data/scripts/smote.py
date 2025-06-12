@@ -29,11 +29,11 @@ except Exception as e:
     exit()
 
 # --- 2. Prepare Features (X) and Target (y) ---
-if TARGET_COLUMN not in df_augmented.columns:
-    print(f"❌ Error: Target column '{TARGET_COLUMN}' not found in the DataFrame.")
-    exit()
 
-X = df_augmented.drop(TARGET_COLUMN, axis=1)
+# Define columns to drop from the feature set to prevent data leakage
+COLS_TO_DROP_FROM_FEATURES = ['Glucose_Level_Class', 'Blood_Glucose_mg/dL']
+
+X = df_augmented.drop(columns=COLS_TO_DROP_FROM_FEATURES) # Drop BOTH the label and its source
 y = df_augmented[TARGET_COLUMN]
 
 # --- 3. Preprocessing for SMOTE ---

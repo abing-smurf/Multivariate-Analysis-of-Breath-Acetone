@@ -1,22 +1,25 @@
 import pandas as pd
 import numpy as np
-import joblib # For loading saved model and objects
+import joblib  # For loading saved model and objects
 from sklearn.metrics import classification_report, confusion_matrix, accuracy_score, roc_auc_score
-# Ensure all necessary preprocessing functions (like classify_glucose if used on raw BGL before other steps)
-# and column name constants are available or redefined here if not part of saved objects.
+from sklearn.exceptions import UndefinedMetricWarning
+import warnings
+
+# Suppress UndefinedMetricWarning for precision/recall when a class has no predictions
+warnings.filterwarnings("ignore", category=UndefinedMetricWarning)
 
 # --- Configuration for New Data Testing ---
-NEW_REAL_DATA_FILE = "../data/test_new_data_correlated_v1.csv"  # <<< YOUR NEW REAL DATASET
+NEW_REAL_DATA_FILE = "../data/test_new_data.csv"  # <<< YOUR NEW REAL DATASET
 SAVED_MODEL_FILE = 'best_glucose_classifier.joblib'
 SAVED_SCALER_FILE = 'scaler.joblib'
 SAVED_LABEL_ENCODER_FILE = 'label_encoder.joblib'
 SAVED_TRAINING_COLUMNS_FILE = 'training_feature_columns.joblib'
 
-TARGET_COLUMN = 'Glucose_Level_Class' # Should be consistent
+TARGET_COLUMN = 'Glucose_Level_Class'  # Should be consistent
 
 # Define categorical features that would have been one-hot encoded during training
 # This list should match the one used when the model was trained
-CATEGORICAL_FEATURES_IN_X_RAW = ['Type_of_Diabetes', 'Gender'] # Example
+CATEGORICAL_FEATURES_IN_X_RAW = ['Type_of_Diabetes', 'Gender']  # Example
 
 # --- 1. Load the Saved Model and Preprocessing Objects ---
 print("🔄 Loading saved model and preprocessors...")
@@ -24,7 +27,7 @@ try:
     model = joblib.load(SAVED_MODEL_FILE)
     scaler = joblib.load(SAVED_SCALER_FILE)
     le = joblib.load(SAVED_LABEL_ENCODER_FILE)
-    training_columns = joblib.load(SAVED_TRAINING_COLUMNS_FILE) # List of feature names model expects
+    training_columns = joblib.load(SAVED_TRAINING_COLUMNS_FILE)  # List of feature names model expects
     print("✅ Model and preprocessors loaded successfully.")
 except FileNotFoundError as e:
     print(f"❌ Error: Could not load a required file. Ensure all .joblib files exist: {e}")
@@ -48,37 +51,38 @@ except Exception as e:
 # --- 3. Preprocess the New Real Data (CRITICAL: Apply IDENTICAL steps as training data) ---
 print("\n⚙️  Preprocessing new real data...")
 
-# Make a copy to avoid SettingWithCopyWarning if df_new_real is used later
+# Make a copy to avoid potential SettingWithCopyWarning
 X_new_real = df_new_real.copy()
 
 # a) Separate target variable (if present for evaluation)
 if TARGET_COLUMN in X_new_real.columns:
-    y_new_real_str = X_new_real.pop(TARGET_COLUMN) # Use .pop to remove it from X_new_real
-    y_new_real_encoded = le.transform(y_new_real_str) # Use the LOADED label encoder
+    y_new_real_str = X_new_real.pop(TARGET_COLUMN)  # Use .pop to get target and remove from X
+    y_new_real_encoded = le.transform(y_new_real_str)
     print(f"  Target variable '{TARGET_COLUMN}' separated and encoded for new data.")
 else:
-    print(f"⚠️ Warning: Target column '{TARGET_COLUMN}' not found in new real data. Will proceed with feature processing only (for prediction).")
+    print(
+        f"⚠️ Warning: Target column '{TARGET_COLUMN}' not found in new real data. Proceeding with feature processing only.")
     y_new_real_str = None
     y_new_real_encoded = None
 
-# b) Initial NaN Handling (Example - must match your original preprocessing logic)
-#    This part needs to be IDENTICAL to how your *original* training data was preprocessed
-#    BEFORE it was fed into the train_test_split and SMOTE pipeline.
-#    For example, if you imputed HbA1c with a mean from the *original training set*, you'd ideally use that saved mean here,
-#    or apply a consistent strategy like median imputation on the new data if that's what you did.
-#    For simplicity, let's assume your original preprocessing (that created augmented_glucose_data_noise_added_cleaned.csv)
-#    already handled NaNs robustly before being input to the SMOTE script.
-#    If df_new_real is truly raw, you'd replicate those initial cleaning steps.
-#    Example using median imputation for any column that had it in training:
-#    if 'HbA1c_%' in X_new_real.columns and X_new_real['HbA1c_%'].isnull().any():
-#        # Ideally, use a saved mean/median from the original training data.
-#        # For now, let's assume new data needs its own imputation if NaNs are present
-#        hba1c_median_new_data = X_new_real['HbA1c_%'].median()
-#        X_new_real['HbA1c_%'] = X_new_real['HbA1c_%'].fillna(hba1c_median_new_data)
-#        print(f"  Filled NaNs in 'HbA1c_%' of new data with its median: {hba1c_median_new_data:.2f}")
-#    (Repeat for other columns like Breath_Acetone_ppm, β-Hydroxybutyrate_mmol/L if they had similar initial NaN/negative handling)
+# b) Drop the raw BGL column from the features to prevent data leakage
+if 'Blood_Glucose_mg/dL' in X_new_real.columns:
+    X_new_real = X_new_real.drop(columns=['Blood_Glucose_mg/dL'])
+    print("  Dropped 'Blood_Glucose_mg/dL' from the new data's feature set.")
+else:
+    print("  'Blood_Glucose_mg/dL' was not found in the new data's features to be dropped (which is expected).")
 
-# c) One-Hot Encode Categorical Features
+# c) Handle initial NaNs if necessary (this logic must match your original preprocessing)
+if 'HbA1c_%' in X_new_real.columns and X_new_real['HbA1c_%'].isnull().any():
+    # Using the median of the *new data* as a fallback. A more robust approach
+    # would be to save and load the median/mean from the original training data.
+    hba1c_median_new_data = X_new_real['HbA1c_%'].median()
+    X_new_real['HbA1c_%'] = X_new_real['HbA1c_%'].fillna(hba1c_median_new_data)
+    print(f"  Filled NaNs in 'HbA1c_%' of new data with its median: {hba1c_median_new_data:.2f}")
+# (Add similar logic for other columns like Breath_Acetone_ppm, β-Hydroxybutyrate_mmol/L if they had NaN handling)
+
+
+# d) One-Hot Encode Categorical Features
 actual_categorical_features_new_data = [col for col in CATEGORICAL_FEATURES_IN_X_RAW if col in X_new_real.columns]
 if actual_categorical_features_new_data:
     print(f"  One-hot encoding categorical features in new data: {actual_categorical_features_new_data}")
@@ -86,44 +90,53 @@ if actual_categorical_features_new_data:
 else:
     print("  No specified categorical features found in new data for one-hot encoding.")
 
-# d) Align Columns with Training Data (Crucial after one-hot encoding)
+# e) Align Columns with Training Data (Crucial after one-hot encoding)
 print("  Aligning columns of new data with training data columns...")
-X_new_real_aligned = pd.DataFrame(columns=training_columns) # Create empty df with training columns
-for col in training_columns:
-    if col in X_new_real.columns:
-        X_new_real_aligned[col] = X_new_real[col]
-    else:
-        X_new_real_aligned[col] = 0 # Add missing columns (from OHE) and fill with 0
-# Ensure order is identical
-X_new_real_processed = X_new_real_aligned[training_columns]
-print(f"  New data aligned. Shape before scaling: {X_new_real_processed.shape}")
+# Use reindex to align columns, which is a robust way to handle this
+# It adds missing columns with NaN (which we fill with 0) and ensures the order is correct.
+X_new_real_aligned = X_new_real.reindex(columns=training_columns, fill_value=0)
+print(f"  New data columns aligned. Shape before scaling: {X_new_real_aligned.shape}")
 
-
-# e) Scale Numerical Features using the LOADED scaler
-# Identify numerical features based on the training_columns (as OHE might have changed dtypes)
-# This assumes training_columns contains all features the model expects.
-# We need to infer numerical columns from the loaded scaler's properties if possible or define them.
-# A simpler way is to ensure your `training_columns` list was created AFTER OHE
-# and before scaling, then find numeric columns within *that list*.
-# For now, let's assume all columns in training_columns are numeric if they were scaled,
-# or that the scaler can handle non-numeric columns by ignoring them (StandardScaler does this).
-# More robust: Identify which columns the scaler was originally fitted on.
-# For simplicity, if all training_columns were originally meant to be scaled (after OHE):
+# f) Scale Numerical Features using the LOADED scaler
+# This final processed dataframe is the one we will use for prediction
+print("  Scaling new data features using the loaded scaler...")
 try:
-    X_new_real_processed = pd.DataFrame(scaler.transform(X_new_real_processed), columns=training_columns)
-    print("  New data features scaled successfully using the loaded scaler.")
-except ValueError as e:
-    print(f"❌ Error scaling new data. Ensure columns match what the scaler expects: {e}")
-    print("   Make sure only numerical columns that were originally scaled are being passed to scaler.transform,")
-    print("   and that they are in the same order as when the scaler was fitted.")
-    exit()
+    # Get the feature names the scaler was fitted on, IN ORDER.
+    # This requires scikit-learn version >= 0.24.
+    if hasattr(scaler, 'feature_names_in_'):
+        scaler_cols_ordered = scaler.feature_names_in_
+    else:
+        # Fallback for older scikit-learn versions: define the list manually.
+        # This list MUST match the order and names from your SMOTE script exactly.
+        print(
+            "  Warning: scaler.feature_names_in_ not found. Using manually defined list for scaling. Ensure order is correct.")
+        scaler_cols_ordered = [
+            'Age', 'BMI', 'HbA1c_%', 'Breath_Acetone_ppm', 'β-Hydroxybutyrate_mmol/L',
+            'Temp_C', 'Humidity_%', 'Fasting_Hours'
+        ]
+        # Filter to only columns that are actually in the aligned dataframe
+        scaler_cols_ordered = [col for col in scaler_cols_ordered if col in X_new_real_aligned.columns]
 
+    # Create a copy to work with, which will be our final processed DataFrame
+    X_new_real_processed = X_new_real_aligned.copy()
+
+    if scaler_cols_ordered.size > 0:  # Or check len() if it's a list
+        # Apply the scaler transformation ONLY to the numerical columns it was trained on,
+        # ensuring they are presented in the correct order.
+        X_new_real_processed[scaler_cols_ordered] = scaler.transform(X_new_real_aligned[scaler_cols_ordered])
+        print("  New data features scaled successfully.")
+    else:
+        print("  No numerical columns identified to scale.")
+
+except Exception as e:
+    print(f"❌ Error scaling new data: {e}")
+    exit()
 
 # --- 4. Make Predictions on the Preprocessed New Real Data ---
 print("\n🤖 Making predictions on the new real data...")
 try:
-    y_pred_new_real = model.predict(X_new_real_processed)
-    y_pred_new_real_str = le.inverse_transform(y_pred_new_real) # Convert predictions back to string labels
+    y_pred_new_real = model.predict(X_new_real_processed)  # This variable is now defined
+    y_pred_new_real_str = le.inverse_transform(y_pred_new_real)  # Convert predictions back to string labels
 
     if hasattr(model, "predict_proba"):
         y_pred_proba_new_real = model.predict_proba(X_new_real_processed)
@@ -141,24 +154,25 @@ if y_new_real_encoded is not None:
     print(f"  Accuracy on new real data: {accuracy_new_real:.4f}")
 
     print("\n  Classification Report on new real data:")
-    # Use target_names from the loaded label encoder
     target_names_from_loaded_le = list(le.classes_)
-    print(classification_report(y_new_real_encoded, y_pred_new_real, target_names=target_names_from_loaded_le, zero_division=0))
+    print(classification_report(y_new_real_encoded, y_pred_new_real, target_names=target_names_from_loaded_le,
+                                zero_division=0))
 
     print("  Confusion Matrix on new real data:")
-    cm_new_real = confusion_matrix(y_new_real_encoded, y_pred_new_real, labels=le.transform(target_names_from_loaded_le))
+    cm_new_real = confusion_matrix(y_new_real_encoded, y_pred_new_real,
+                                   labels=le.transform(target_names_from_loaded_le))
     cm_df_new_real = pd.DataFrame(cm_new_real, index=target_names_from_loaded_le, columns=target_names_from_loaded_le)
     print(cm_df_new_real)
 
-    if y_pred_proba_new_real is not None and len(np.unique(y_new_real_encoded)) > 1 and y_pred_proba_new_real.shape[1] == len(target_names_from_loaded_le):
+    if y_pred_proba_new_real is not None and len(np.unique(y_new_real_encoded)) > 1:
         try:
-            auc_score_new_real = roc_auc_score(y_new_real_encoded, y_pred_proba_new_real, multi_class='ovr', average='weighted', labels=le.transform(target_names_from_loaded_le))
+            auc_score_new_real = roc_auc_score(y_new_real_encoded, y_pred_proba_new_real, multi_class='ovr',
+                                               average='weighted', labels=le.transform(target_names_from_loaded_le))
             print(f"  Weighted AUC-ROC on new real data: {auc_score_new_real:.4f}")
         except ValueError as e_auc:
             print(f"  Could not calculate AUC-ROC on new data: {e_auc}")
-    # ... (other AUC messages as in previous script) ...
 else:
-    print("\nℹ️ True labels for new real data not available for evaluation. Predictions generated and can be inspected (e.g., y_pred_new_real_str).")
-
+    print(
+        "\nℹ️ True labels for new real data not available for evaluation. Predictions generated and can be inspected (e.g., y_pred_new_real_str).")
 
 print("\n🎉 Testing on new real data script finished.")
