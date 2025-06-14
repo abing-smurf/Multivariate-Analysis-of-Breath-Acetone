@@ -1,36 +1,47 @@
+# ==============================================================================
+# Thesis Assistant: Synthetic vs. Real Data Quality Evaluation
+# ==============================================================================
+# Description:
+# This script provides a comprehensive comparison between a real dataset and a
+# synthetically generated one. It uses a combination of visual plots (KDE,
+# boxplots, count plots, heatmaps) and statistical tests (Descriptive Stats,
+# KS-Test, Jensen-Shannon Divergence) to evaluate the quality and fidelity
+# of the synthetic data.
+# ==============================================================================
+
 import pandas as pd
 import numpy as np
 import matplotlib.pyplot as plt
 import seaborn as sns
-from scipy import stats  # For KS test
-from scipy.spatial.distance import jensenshannon  # For JS Divergence
-from scipy.stats import entropy  # For Kullback-Leibler divergence, used in JS
+from scipy import stats
+from scipy.spatial.distance import jensenshannon
+import warnings
+
+warnings.filterwarnings('ignore')
 
 # --- Configuration ---
-REAL_DATA_FILE = "../data/dummy_glucose_data.csv"  # Or your actual preprocessed real data file
-SYNTHETIC_DATA_FILE = "../data/smote_balanced_training_data.csv"
+# IMPORTANT: Update these file paths to match your files.
+REAL_DATA_FILE = "../data/raw_data.csv"  # The original data file used to train the CTGAN
+SYNTHETIC_DATA_FILE = "../data/augmented_data_by_noise.csv" # The output from the CTGAN script
 
-# Define columns you want to compare
+# Define columns to compare based on the latest CTGAN script
 NUMERICAL_COLUMNS_TO_COMPARE = [
-    'Age', 'BMI', 'Blood_Glucose_mg/dL', 'HbA1c_%',
-    'Breath_Acetone_ppm', 'β-Hydroxybutyrate_mmol/L',
-    'Temp_C', 'Humidity_%', 'Fasting_Hours'
+    'Age', 'Systolic_BP', 'Diastolic_BP', 'BMI', 'Pulse rate',
+    'HbA1c_%', 'Respiratory Rate', 'Acetone PPM 1.1', 'Temperature', 'Humidity'
 ]
 DISCRETE_COLUMNS_TO_COMPARE = [
-    'Glucose_Level_Class'
+    'Glucose_classification_class'
 ]
 # Number of bins for discretizing continuous data for JS Divergence
-N_BINS_FOR_JS = 30  # You can adjust this
+N_BINS_FOR_JS = 30
 
-# --- 1. Load Datasets ---
+
+# --- 1. Load and Preprocess Datasets ---
 try:
-    df_real = pd.read_csv(REAL_DATA_FILE)
-    print(f"✅ Successfully loaded real data: {REAL_DATA_FILE} (Shape: {df_real.shape})")
+    df_real_raw = pd.read_csv(REAL_DATA_FILE)
+    print(f"✅ Successfully loaded real data: {REAL_DATA_FILE} (Shape: {df_real_raw.shape})")
 except FileNotFoundError:
     print(f"❌ Error: Real data file '{REAL_DATA_FILE}' not found.")
-    exit()
-except Exception as e:
-    print(f"❌ Error loading real data file '{REAL_DATA_FILE}': {e}")
     exit()
 
 try:
@@ -39,9 +50,21 @@ try:
 except FileNotFoundError:
     print(f"❌ Error: Synthetic data file '{SYNTHETIC_DATA_FILE}' not found.")
     exit()
-except Exception as e:
-    print(f"❌ Error loading synthetic data file '{SYNTHETIC_DATA_FILE}': {e}")
-    exit()
+
+# Preprocess the real data exactly as in the generation script to make it comparable
+print("\nPreprocessing real data for a fair comparison...")
+df_real = df_real_raw.drop(columns=['Height', 'Weight'], errors='ignore')
+if 'Blood Pressure' in df_real.columns:
+    bp_split = df_real['Blood Pressure'].str.split('/', expand=True)
+    df_real['Systolic_BP'] = pd.to_numeric(bp_split[0], errors='coerce')
+    df_real['Diastolic_BP'] = pd.to_numeric(bp_split[1], errors='coerce')
+    df_real = df_real.drop('Blood Pressure', axis=1)
+
+# Drop NaN rows from both dataframes to ensure statistical tests work correctly
+df_real.dropna(inplace=True)
+df_synthetic.dropna(inplace=True)
+print("✅ Preprocessing and NaN removal complete.")
+
 
 # --- Filter columns to only those present in both dataframes ---
 common_numerical_cols = [col for col in NUMERICAL_COLUMNS_TO_COMPARE if
@@ -49,19 +72,17 @@ common_numerical_cols = [col for col in NUMERICAL_COLUMNS_TO_COMPARE if
 common_discrete_cols = [col for col in DISCRETE_COLUMNS_TO_COMPARE if
                         col in df_real.columns and col in df_synthetic.columns]
 
-if not common_numerical_cols:
-    print("\n⚠️ No common numerical columns found to compare. Please check your column lists and CSV files.")
-if not common_discrete_cols:
-    print("\n⚠️ No common discrete columns found to compare. Please check your column lists and CSV files.")
+if not common_numerical_cols and not common_discrete_cols:
+    print("\n❌ No common columns found to compare. Please check your column lists and CSV files.")
+    exit()
 
 # Add a 'Source' column for combined plotting
-df_real_plot = df_real.copy()  # Use copies for plotting to avoid modifying original dfs if script is re-run
-df_synthetic_plot = df_synthetic.copy()
-df_real_plot['Source'] = 'Real'
-df_synthetic_plot['Source'] = 'Synthetic'
-combined_df_plot = pd.concat([df_real_plot, df_synthetic_plot], ignore_index=True)
+df_real['Source'] = 'Real'
+df_synthetic['Source'] = 'Synthetic'
+combined_df_plot = pd.concat([df_real, df_synthetic], ignore_index=True)
 
-# --- 2. Visual Comparison (No changes here, kept for completeness) ---
+
+# --- 2. Visual Comparison ---
 print("\n📊 Starting Visual Comparison...")
 # KDE Plots
 if common_numerical_cols:
@@ -72,11 +93,10 @@ if common_numerical_cols:
         plt.title(f'Distribution Comparison for {col} (KDE)', fontsize=15)
         plt.xlabel(col, fontsize=12)
         plt.ylabel('Density', fontsize=12)
+        plt.grid(True, which='both', linestyle='--', linewidth=0.5)
         plt.tight_layout()
         plt.show()
-        # print(f"    ✅ KDE plot for {col} generated.")
-else:
-    print("  Skipping KDE plots as no common numerical columns were identified.")
+
 # Boxplots
 if common_numerical_cols:
     print("\n  Generating Boxplots...")
@@ -86,12 +106,11 @@ if common_numerical_cols:
         plt.title(f'Boxplot Comparison for {col}', fontsize=15)
         plt.xlabel('Data Source', fontsize=12)
         plt.ylabel(col, fontsize=12)
+        plt.grid(True, axis='y', linestyle='--', linewidth=0.5)
         plt.tight_layout()
         plt.show()
-        # print(f"    ✅ Boxplot for {col} generated.")
-else:
-    print("  Skipping Boxplots as no common numerical columns were identified.")
-# Count Plots
+
+# Count Plots for Discrete Columns
 if common_discrete_cols:
     print("\n  Generating Count Plots for Discrete Columns...")
     for col in common_discrete_cols:
@@ -100,12 +119,8 @@ if common_discrete_cols:
         plt.title(f'Distribution Comparison for {col} (Counts)', fontsize=15)
         plt.xlabel(col, fontsize=12)
         plt.ylabel('Count', fontsize=12)
-        plt.xticks(rotation=45, ha='right')
         plt.tight_layout()
         plt.show()
-        # print(f"    ✅ Count plot for {col} generated.")
-else:
-    print("  Skipping Count plots as no common discrete columns were identified.")
 
 # --- 3. Numerical Comparison ---
 print("\n🔢 Starting Numerical Comparison...")
@@ -117,138 +132,62 @@ if common_numerical_cols:
     stats_synthetic = df_synthetic[common_numerical_cols].describe().T
     comparison_stats = pd.concat([stats_real.add_suffix('_Real'), stats_synthetic.add_suffix('_Synthetic')], axis=1)
     print(comparison_stats)
-else:
-    print("  Skipping Descriptive Statistics as no common numerical columns were identified.")
 
 # Kolmogorov-Smirnov (KS) Test
 if common_numerical_cols:
-    print("\n  Kolmogorov-Smirnov (KS) Test for distribution similarity (comparing Real vs. Synthetic):")
-    print("  (p-value > 0.05 suggests distributions are similar)")
+    print("\n  Kolmogorov-Smirnov (KS) Test for distribution similarity:")
+    print("  (A high p-value, e.g., > 0.05, suggests the distributions are similar)")
     ks_results = []
     for col in common_numerical_cols:
-        real_col_data = df_real[col].dropna()
-        synthetic_col_data = df_synthetic[col].dropna()
-        if len(real_col_data) > 1 and len(synthetic_col_data) > 1:
-            ks_statistic, p_value = stats.ks_2samp(real_col_data, synthetic_col_data)
-            ks_results.append({'Column': col, 'KS Statistic': ks_statistic, 'P-Value': p_value})
-        else:
-            ks_results.append({'Column': col, 'KS Statistic': np.nan, 'P-Value': 'Not enough data'})
+        ks_statistic, p_value = stats.ks_2samp(df_real[col], df_synthetic[col])
+        ks_results.append({'Column': col, 'KS Statistic': ks_statistic, 'P-Value': p_value})
     ks_df = pd.DataFrame(ks_results)
-    print(ks_df)
-else:
-    print("  Skipping KS Test as no common numerical columns were identified.")
+    print(ks_df.round(4))
 
-
-# --- NEW: Jensen-Shannon Divergence ---
+# Jensen-Shannon (JS) Divergence
 def get_probability_distribution(data_series, n_bins, global_min, global_max):
-    """Helper function to get binned probability distribution for numerical data."""
-    # Create histogram counts using common bins
-    counts, bin_edges = np.histogram(data_series.dropna(), bins=n_bins, range=(global_min, global_max))
-    # Convert counts to probabilities
+    counts, _ = np.histogram(data_series, bins=n_bins, range=(global_min, global_max))
+    # Add a small epsilon to avoid zero probabilities
     probabilities = counts / counts.sum()
-    # Add a small epsilon to avoid zero probabilities for entropy calculation
-    probabilities = np.where(probabilities == 0, 1e-10, probabilities)
-    return probabilities, bin_edges
-
+    return np.where(probabilities == 0, 1e-10, probabilities)
 
 if common_numerical_cols:
-    print("\n  Jensen-Shannon (JS) Divergence for Numerical Columns (0=identical, ~0.693=max different for log_e):")
+    print("\n  Jensen-Shannon (JS) Divergence for Numerical Columns (0=identical, higher=more different):")
     js_numerical_results = []
     for col in common_numerical_cols:
-        real_data = df_real[col].dropna()
-        synthetic_data = df_synthetic[col].dropna()
-
-        if len(real_data) == 0 or len(synthetic_data) == 0:
-            js_numerical_results.append({'Column': col, 'JS Divergence': np.nan, 'Note': 'Empty data for column'})
-            continue
-
-        # Determine common range for binning
-        global_min = min(real_data.min(), synthetic_data.min())
-        global_max = max(real_data.max(), synthetic_data.max())
-
-        if global_min == global_max:  # Handle case where all values are the same
-            js_numerical_results.append(
-                {'Column': col, 'JS Divergence': 0.0 if len(real_data) > 0 and len(synthetic_data) > 0 else np.nan,
-                 'Note': 'All values identical or insufficient data'})
-            continue
-
-        p, _ = get_probability_distribution(real_data, N_BINS_FOR_JS, global_min, global_max)
-        q, _ = get_probability_distribution(synthetic_data, N_BINS_FOR_JS, global_min, global_max)
-
-        try:
-            js_div = jensenshannon(p, q)  # Uses natural logarithm by default
-            js_numerical_results.append({'Column': col, 'JS Divergence': js_div, 'Note': ''})
-        except ValueError as e:
-            js_numerical_results.append({'Column': col, 'JS Divergence': np.nan, 'Note': f'Error: {e}'})
-
+        real_data = df_real[col]
+        synthetic_data = df_synthetic[col]
+        global_min, global_max = min(real_data.min(), synthetic_data.min()), max(real_data.max(), synthetic_data.max())
+        p = get_probability_distribution(real_data, N_BINS_FOR_JS, global_min, global_max)
+        q = get_probability_distribution(synthetic_data, N_BINS_FOR_JS, global_min, global_max)
+        js_div = jensenshannon(p, q, base=2)
+        js_numerical_results.append({'Column': col, 'JS Divergence': js_div})
     js_numerical_df = pd.DataFrame(js_numerical_results)
-    print(js_numerical_df)
-else:
-    print("  Skipping JS Divergence for numerical columns.")
+    print(js_numerical_df.round(4))
 
 if common_discrete_cols:
-    print("\n  Jensen-Shannon (JS) Divergence for Discrete Columns (0=identical, ~0.693=max different for log_e):")
+    print("\n  Jensen-Shannon (JS) Divergence for Discrete Columns:")
     js_discrete_results = []
     for col in common_discrete_cols:
         p_counts = df_real[col].value_counts(normalize=True)
         q_counts = df_synthetic[col].value_counts(normalize=True)
-
-        # Align categories: create a combined index and reindex both series, filling missing with 0
         all_categories = p_counts.index.union(q_counts.index)
-        p = p_counts.reindex(all_categories, fill_value=0.0)
-        q = q_counts.reindex(all_categories, fill_value=0.0)
-
-        # Add a small epsilon to avoid zero probabilities
-        p = np.where(p == 0, 1e-10, p)
-        q = np.where(q == 0, 1e-10, q)
-
-        # Ensure they sum to 1 after adding epsilon (normalize again if necessary)
-        p /= np.sum(p)
-        q /= np.sum(q)
-
-        try:
-            js_div = jensenshannon(p, q)
-            js_discrete_results.append({'Column': col, 'JS Divergence': js_div})
-        except ValueError as e:
-            js_discrete_results.append({'Column': col, 'JS Divergence': np.nan, 'Note': f'Error: {e}'})
-
+        p = p_counts.reindex(all_categories, fill_value=1e-10)
+        q = q_counts.reindex(all_categories, fill_value=1e-10)
+        js_div = jensenshannon(p, q, base=2)
+        js_discrete_results.append({'Column': col, 'JS Divergence': js_div})
     js_discrete_df = pd.DataFrame(js_discrete_results)
-    print(js_discrete_df)
-else:
-    print("  Skipping JS Divergence for discrete columns.")
+    print(js_discrete_df.round(4))
 
-# Value Counts for Discrete Columns (No changes here)
-if common_discrete_cols:
-    print("\n  Value Counts for Discrete Columns (Normalized Percentage %):")
-    for col in common_discrete_cols:
-        print(f"\n    Column: {col}")
-        real_counts = df_real[col].value_counts(normalize=True).mul(100).round(2)
-        synthetic_counts = df_synthetic[col].value_counts(normalize=True).mul(100).round(2)
-        counts_comparison_df = pd.DataFrame({
-            'Real (%)': real_counts,
-            'Synthetic (%)': synthetic_counts
-        }).fillna(0)
-        print(counts_comparison_df)
-else:
-    print("  Skipping Value Counts as no common discrete columns were identified.")
-
-# Correlation Matrix Comparison (No changes here)
-if common_numerical_cols and len(common_numerical_cols) > 1:
+# Correlation Matrix Comparison
+if len(common_numerical_cols) > 1:
     print("\n  Correlation Matrix Comparison (Heatmaps):")
-    plt.figure(figsize=(12, 10))
-    sns.heatmap(df_real[common_numerical_cols].corr(), annot=True, cmap='coolwarm', fmt=".2f", vmin=-1, vmax=1)
-    plt.title('Correlation Matrix - Real Data', fontsize=15)
+    fig, axes = plt.subplots(1, 2, figsize=(24, 10))
+    sns.heatmap(df_real[common_numerical_cols].corr(), annot=True, cmap='coolwarm', fmt=".2f", ax=axes[0])
+    axes[0].set_title('Correlation Matrix - Real Data', fontsize=15)
+    sns.heatmap(df_synthetic[common_numerical_cols].corr(), annot=True, cmap='coolwarm', fmt=".2f", ax=axes[1])
+    axes[1].set_title('Correlation Matrix - Synthetic Data', fontsize=15)
     plt.tight_layout()
     plt.show()
-    # print("    ✅ Correlation heatmap for Real Data generated.")
-
-    plt.figure(figsize=(12, 10))
-    sns.heatmap(df_synthetic[common_numerical_cols].corr(), annot=True, cmap='coolwarm', fmt=".2f", vmin=-1, vmax=1)
-    plt.title('Correlation Matrix - Synthetic Data', fontsize=15)
-    plt.tight_layout()
-    plt.show()
-    # print("    ✅ Correlation heatmap for Synthetic Data generated.")
-else:
-    print("  Skipping Correlation Matrix comparison (not enough common numerical columns).")
 
 print("\n🎉 Comparison Script Finished.")

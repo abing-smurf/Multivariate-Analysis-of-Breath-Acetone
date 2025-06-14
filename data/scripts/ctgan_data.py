@@ -1,330 +1,206 @@
 import pandas as pd
-import numpy as np # Import numpy for np.nan
+import numpy as np
 from ctgan import CTGAN
-from sklearn.preprocessing import MinMaxScaler # Import MinMaxScaler
+from sklearn.preprocessing import MinMaxScaler
+import warnings
 
-# Define column names (CHANGE IF YOURS ARE DIFFERENT)
-BREATH_ACETONE_COLUMN = 'Breath_Acetone_ppm'
-BHB_COLUMN = 'β-Hydroxybutyrate_mmol/L' # New column for Beta-Hydroxybutyrate
+warnings.filterwarnings('ignore')
 
-# --- 1. Load and Preprocess Your Original Data ---
+# --- 1. Load Your Original Data ---
+
+# IMPORTANT: Replace with the name of your input file.
+input_filename = "your_dataset.csv"
+
 try:
-    df_real = pd.read_csv("../data/augmented_glucose_data_noise_added_cleaned.csv")
+    df_real = pd.read_csv(input_filename)
+    # If 'Height' and 'Weight' columns exist, drop them.
+    df_real.drop(columns=['Height', 'Weight'], inplace=True, errors='ignore')
+
 except FileNotFoundError:
-    print("Error: 'augmented_glucose_data.csv' not found. Please ensure the file exists.")
-    exit()
+    print(f"Error: '{input_filename}' not found. Please ensure the file exists in the correct directory.")
+    # As a fallback for demonstration, create a dummy dataframe
+    print("Creating a dummy dataframe for demonstration purposes...")
+    data = {
+        'Age': [55, 62, 48, 70, 35],
+        'Blood Pressure': ['120/80', '140/90', '110/70', '150/95', '115/75'],
+        'BMI': [25.7, 29.4, 24.0, 29.3, 22.0],
+        'Pulse rate': [72, 80, 68, 85, 75],
+        'HbA1c_%': [5.7, 6.5, 5.2, 7.8, 5.5],
+        'Respiratory Rate': [16, 18, 15, 20, 17],
+        'Acetone PPM 1.1': [1.2, 1.8, 0.9, 2.5, 1.1],
+        'Temperature': [36.5, 36.8, 36.4, 37.0, 36.6],
+        'Humidity': [50, 55, 48, 60, 52],
+        'Glucose_classification_class': [0, 1, 0, 2, 0]  # Example: 0=Normal, 1=Prediabetic, 2=Diabetic
+    }
+    df_real = pd.DataFrame(data)
 
-print("✅ Original Data Loaded. Shape:", df_real.shape)
-# print("Data types before processing:\n", df_real.dtypes) # Can be verbose
-
-# --- Initial NaN Check (Before any processing) ---
-# print("\nInitial NaN values in df_real:")
-# print(df_real.isnull().sum())
-
-# --- Data Preprocessing for df_real ---
-# Fill missing HbA1c values
-if 'HbA1c_%' in df_real.columns:
-    if df_real['HbA1c_%'].isnull().any():
-        hba1c_mean = df_real['HbA1c_%'].mean()
-        df_real['HbA1c_%'] = df_real['HbA1c_%'].fillna(hba1c_mean)
-        print(f"\nFilled NaNs in 'HbA1c_%' with mean: {hba1c_mean:.2f}")
-
-# Handle negative Breath Acetone values by setting them to NaN
-if BREATH_ACETONE_COLUMN in df_real.columns:
-    negative_acetone_count = (df_real[BREATH_ACETONE_COLUMN] < 0).sum()
-    if negative_acetone_count > 0:
-        df_real.loc[df_real[BREATH_ACETONE_COLUMN] < 0, BREATH_ACETONE_COLUMN] = np.nan
-        # print(f"\nConverted {negative_acetone_count} negative '{BREATH_ACETONE_COLUMN}' values to NaN in df_real.")
-    if df_real[BREATH_ACETONE_COLUMN].isnull().any():
-        acetone_median = df_real[BREATH_ACETONE_COLUMN].median()
-        df_real[BREATH_ACETONE_COLUMN] = df_real[BREATH_ACETONE_COLUMN].fillna(acetone_median)
-        print(f"Filled NaNs in '{BREATH_ACETONE_COLUMN}' with median: {acetone_median:.2f}")
-# else:
-    # print(f"\nWarning: Column '{BREATH_ACETONE_COLUMN}' not found in df_real.")
-
-# Handle negative β-Hydroxybutyrate_mmol/L values by setting them to NaN
-if BHB_COLUMN in df_real.columns:
-    negative_bhb_count = (df_real[BHB_COLUMN] < 0).sum()
-    if negative_bhb_count > 0:
-        df_real.loc[df_real[BHB_COLUMN] < 0, BHB_COLUMN] = np.nan
-        # print(f"\nConverted {negative_bhb_count} negative '{BHB_COLUMN}' values to NaN in df_real.")
-    if df_real[BHB_COLUMN].isnull().any():
-        bhb_median = df_real[BHB_COLUMN].median()
-        df_real[BHB_COLUMN] = df_real[BHB_COLUMN].fillna(bhb_median)
-        print(f"Filled NaNs in '{BHB_COLUMN}' with median: {bhb_median:.2f}")
-# else:
-    # print(f"\nWarning: Column '{BHB_COLUMN}' not found in df_real.")
-
-
-if 'Blood_Glucose_mg/dL' not in df_real.columns:
-    print("Error: 'Blood_Glucose_mg/dL' column is required to create 'Glucose_Level_Class' but not found.")
-    exit()
-
-def classify_glucose_level(value):
-    if pd.isna(value):
-        return 'Undefined' # Or handle as appropriate for your case
-    if value < 70:
-        return 'Low'
-    elif 70 <= value <= 139:
-        return 'Normal'
-    else:
-        return 'High'
-
-df_real['Glucose_Level_Class'] = df_real['Blood_Glucose_mg/dL'].apply(classify_glucose_level)
-
-print("\n📊 Overall Missing Values in df_real (after initial preprocessing):")
-missing_values_real = df_real.isnull().sum()
-missing_report_real = pd.DataFrame({'Missing Values': missing_values_real})
-print(missing_report_real[missing_report_real['Missing Values'] > 0])
-if missing_report_real['Missing Values'].sum() == 0:
-    print("No missing values in df_real after initial preprocessing.")
-
-print("\n✅ Original Data Sample (after initial preprocessing):")
+print(f"✅ Original Data Loaded. Shape: {df_real.shape}")
+print("Original Data Sample:")
 print(df_real.head(3))
-print("\nDistribution of Glucose Levels in Original Data:")
-print(df_real['Glucose_Level_Class'].value_counts(normalize=True).mul(100).round(2).astype(str) + '%')
 
-# --- 2. Identify Discrete (Categorical) and Numerical Columns ---
-discrete_columns = ['Glucose_Level_Class']
-if 'Gender' in df_real.columns: # Example, if you have a Gender column
-    discrete_columns.append('Gender')
-discrete_columns = [col for col in discrete_columns if col in df_real.columns]
+# --- 2. Preprocess Data ---
+# This section handles missing values and corrects invalid data before training.
+
+# NEW: Parse Blood Pressure column
+if 'Blood Pressure' in df_real.columns:
+    print("\nProcessing 'Blood Pressure' column...")
+    # Split the column into two new ones, Systolic and Diastolic
+    bp_split = df_real['Blood Pressure'].str.split('/', expand=True)
+
+    # Assign to new columns and convert to numeric, coercing errors to NaN
+    df_real['Systolic_BP'] = pd.to_numeric(bp_split[0], errors='coerce')
+    df_real['Diastolic_BP'] = pd.to_numeric(bp_split[1], errors='coerce')
+
+    # Drop the original 'Blood Pressure' column
+    df_real.drop('Blood Pressure', axis=1, inplace=True)
+    print("✅ 'Blood Pressure' split into 'Systolic_BP' and 'Diastolic_BP'.")
+
+# Fill missing HbA1c values using the mean
+if 'HbA1c_%' in df_real.columns and df_real['HbA1c_%'].isnull().any():
+    hba1c_mean = df_real['HbA1c_%'].mean()
+    df_real['HbA1c_%'].fillna(hba1c_mean, inplace=True)
+    print(f"Filled NaNs in 'HbA1c_%' with mean: {hba1c_mean:.2f}")
+
+# Handle potential negative 'Acetone PPM 1.1' values by setting to NaN, then filling with median
+if 'Acetone PPM 1.1' in df_real.columns:
+    negative_acetone_count = (df_real['Acetone PPM 1.1'] < 0).sum()
+    if negative_acetone_count > 0:
+        df_real.loc[df_real['Acetone PPM 1.1'] < 0, 'Acetone PPM 1.1'] = np.nan
+        print(f"Converted {negative_acetone_count} negative 'Acetone PPM 1.1' values to NaN.")
+
+    if df_real['Acetone PPM 1.1'].isnull().any():
+        acetone_median = df_real['Acetone PPM 1.1'].median()
+        df_real['Acetone PPM 1.1'].fillna(acetone_median, inplace=True)
+        print(f"Filled NaNs in 'Acetone PPM 1.1' with median: {acetone_median:.2f}")
+
+# Check for any other missing values and report
+print("\n📊 Missing Values Report (after preprocessing):")
+if df_real.isnull().sum().sum() == 0:
+    print("No missing values found in the dataset.")
+else:
+    print(df_real.isnull().sum())
+
+# --- 3. Identify Discrete (Categorical) and Numerical Columns ---
+discrete_columns = ['Glucose_classification_class']
 print(f"\nDiscrete columns for CTGAN: {discrete_columns}")
 
-# Identify numerical columns for normalization (excluding IDs or already discrete columns)
-# Make sure to list all columns that are numeric and should be scaled
+# UPDATED: 'Height' and 'Weight' have been removed from this list.
 numerical_cols_to_scale = [
-    'Age', 'BMI', 'Blood_Glucose_mg/dL', 'HbA1c_%',
-    BREATH_ACETONE_COLUMN, BHB_COLUMN,
-    'Temp_C', 'Humidity_%', 'Fasting_Hours'
+    'Age', 'Systolic_BP', 'Diastolic_BP', 'BMI', 'Pulse rate',
+    'HbA1c_%', 'Respiratory Rate', 'Acetone PPM 1.1', 'Temperature', 'Humidity'
 ]
-# Filter to only include columns that actually exist in df_real
+# Filter to only include columns that actually exist in the dataframe
 numerical_cols_to_scale = [col for col in numerical_cols_to_scale if col in df_real.columns]
 print(f"Numerical columns to be scaled: {numerical_cols_to_scale}")
 
-
-# --- PREPARE DATA FOR CTGAN TRAINING ---
+# --- 4. Prepare Data for CTGAN Training ---
 df_real_for_training = df_real.copy()
 
-# Drop rows with any remaining NaNs before normalization and training
-# This is crucial as scalers and CTGAN cannot handle NaNs in the training data
-print(f"\nShape of data before dropping NaNs for Normalization/CTGAN training: {df_real_for_training.shape}")
+# Drop any rows with remaining NaNs before training to prevent errors.
+print(f"\nShape before dropping NaNs for training: {df_real_for_training.shape}")
 df_real_for_training.dropna(subset=numerical_cols_to_scale + discrete_columns, inplace=True)
-print(f"Shape of data after dropping NaNs for Normalization/CTGAN training: {df_real_for_training.shape}")
+print(f"Shape after dropping NaNs for training: {df_real_for_training.shape}")
 
 if df_real_for_training.empty:
-    print("Error: DataFrame is empty after dropping NaNs. CTGAN cannot be trained. Please check data quality or imputation strategy.")
+    print("Error: DataFrame is empty after dropping NaNs. CTGAN cannot be trained.")
     exit()
 
-# --- NEW: Normalize Numerical Features in Real Data for Training ---
-scalers = {} # To store scalers for inverse transformation later
+# --- 5. Normalize Numerical Features ---
+scalers = {}  # Dictionary to store scalers for each column for later reuse
 df_normalized_for_training = df_real_for_training.copy()
 
-if numerical_cols_to_scale: # Proceed only if there are numerical columns to scale
-    print("\n🔄 Normalizing numerical features for CTGAN training...")
-    for col in numerical_cols_to_scale:
-        if col in df_normalized_for_training.columns: # Ensure column exists
-            scaler = MinMaxScaler()
-            df_normalized_for_training[col] = scaler.fit_transform(df_normalized_for_training[[col]])
-            scalers[col] = scaler # Store the scaler
-            print(f"Normalized '{col}'. Min: {df_normalized_for_training[col].min():.2f}, Max: {df_normalized_for_training[col].max():.2f}")
-    print("✅ Normalization complete for training data.")
-    print("Sample of normalized data for training:")
-    print(df_normalized_for_training[numerical_cols_to_scale].head(3))
-else:
-    print("\nNo numerical columns specified or found for scaling.")
+print("\n🔄 Normalizing numerical features for CTGAN training...")
+for col in numerical_cols_to_scale:
+    scaler = MinMaxScaler()
+    df_normalized_for_training[col] = scaler.fit_transform(df_normalized_for_training[[col]])
+    scalers[col] = scaler  # Store the fitted scaler
+print("✅ Normalization complete for training data.")
 
-
-# --- 3. Initialize and Train the CTGAN Synthesizer ---
-# CTGAN will be trained on the df_normalized_for_training
-ctgan_model = CTGAN(epochs=500, verbose=True) # Using 500 epochs
+# --- 6. Initialize and Train the CTGAN Synthesizer ---
+ctgan_model = CTGAN(epochs=500, verbose=True)
 print("\n🚀 Starting CTGAN model training on NORMALIZED data...")
 try:
-    # Ensure discrete_columns are present in df_normalized_for_training
-    valid_discrete_columns = [col for col in discrete_columns if col in df_normalized_for_training.columns]
-    ctgan_model.fit(df_normalized_for_training, valid_discrete_columns)
+    ctgan_model.fit(df_normalized_for_training, discrete_columns)
     print("✅ CTGAN model training complete.")
 except Exception as e:
     print(f"❌ Error during CTGAN training: {e}")
     exit()
 
-# --- 4. Generate Synthetic Data CONDITIONALLY ---
-# The synthetic data will be generated in the NORMALIZED scale
-n_total_synthetic = 900 # Target total, actual might be slightly different due to rounding
-# Adjust proportions based on your desired target distribution or real data distribution
-# Example: trying to match real data distribution if df_real_for_training is representative
-if not df_real_for_training.empty and 'Glucose_Level_Class' in df_real_for_training.columns:
-    class_proportions = df_real_for_training['Glucose_Level_Class'].value_counts(normalize=True)
-    n_samples_low = int(n_total_synthetic * class_proportions.get('Low', 0))
-    n_samples_normal = int(n_total_synthetic * class_proportions.get('Normal', 0))
-    n_samples_high = int(n_total_synthetic * class_proportions.get('High', 0))
-    # Adjust for any 'Undefined' or other classes if they exist and you want to sample them
-else: # Fallback if proportions can't be determined
-    n_samples_low = int(n_total_synthetic * 0.33)
-    n_samples_normal = int(n_total_synthetic * 0.34)
-    n_samples_high = int(n_total_synthetic * 0.33)
+# --- 7. Generate Synthetic Data CONDITIONALLY ---
+num_samples_per_class = 500
+class_labels = df_real_for_training['Glucose_classification_class'].unique()
 
+print(f"\n🧪 Generating {num_samples_per_class} samples for each class: {class_labels}...")
 
-print(f"\n🧪 Generating {n_samples_low} 'Low', {n_samples_normal} 'Normal', {n_samples_high} 'High' synthetic samples (normalized scale)...")
+all_synthetic_data = []
 try:
-    synthetic_low_normalized = ctgan_model.sample(n_samples_low, condition_column='Glucose_Level_Class', condition_value='Low')
-    synthetic_normal_normalized = ctgan_model.sample(n_samples_normal, condition_column='Glucose_Level_Class', condition_value='Normal')
-    synthetic_high_normalized = ctgan_model.sample(n_samples_high, condition_column='Glucose_Level_Class', condition_value='High')
-    df_synthetic_normalized = pd.concat([synthetic_low_normalized, synthetic_normal_normalized, synthetic_high_normalized], ignore_index=True)
+    for label in class_labels:
+        synthetic_class_normalized = ctgan_model.sample(
+            num_samples_per_class,
+            condition_column='Glucose_classification_class',
+            condition_value=label
+        )
+        all_synthetic_data.append(synthetic_class_normalized)
+
+    df_synthetic_normalized = pd.concat(all_synthetic_data, ignore_index=True)
     print("✅ Conditional synthetic data generated (in normalized scale).")
-    print("Sample of raw synthetic data (normalized):")
-    print(df_synthetic_normalized.head(3))
 except Exception as e:
     print(f"Error during conditional sampling: {e}")
     exit()
 
-# --- NEW: Inverse Transform Synthetic Data to Original Scale ---
-df_synthetic_conditional = df_synthetic_normalized.copy()
-if scalers and not df_synthetic_conditional.empty: # Proceed only if scalers exist and data is not empty
-    print("\n🔄 Inverse transforming synthetic data to original scale...")
-    for col, scaler_obj in scalers.items():
-        if col in df_synthetic_conditional.columns: # Ensure column exists in synthetic data
-            df_synthetic_conditional[col] = scaler_obj.inverse_transform(df_synthetic_conditional[[col]])
-            print(f"Inverse transformed '{col}'. Example val: {df_synthetic_conditional[col].iloc[0]:.2f} (if exists)")
-    print("✅ Inverse transformation complete.")
-    print("Sample of synthetic data (original scale):")
-    print(df_synthetic_conditional.head(3))
-elif df_synthetic_conditional.empty:
-    print("Warning: Synthetic data is empty, skipping inverse transform.")
-else:
-    print("\nNo scalers available or numerical columns were scaled. Skipping inverse transform.")
+# --- 8. Inverse Transform Synthetic Data to Original Scale ---
+df_synthetic_original_scale = df_synthetic_normalized.copy()
+print("\n🔄 Inverse transforming synthetic data to original scale...")
+for col, scaler_obj in scalers.items():
+    if col in df_synthetic_original_scale.columns:
+        df_synthetic_original_scale[col] = scaler_obj.inverse_transform(df_synthetic_original_scale[[col]])
+print("✅ Inverse transformation complete.")
+print("Sample of synthetic data (original scale):")
+print(df_synthetic_original_scale.head(3))
 
+# --- 9. Clean and Format the Final Synthetic Data ---
+print("\n🧼 Cleaning and formatting synthetic data...")
+df_final_synthetic = df_synthetic_original_scale.copy()
 
-# --- 5. Clean the Synthetic Data (Post-processing and Clipping on ORIGINAL SCALE data) ---
-print("\n🧼 Cleaning and clipping synthetic data (original scale)...")
-if not df_synthetic_conditional.empty:
-    if 'Age' in df_synthetic_conditional.columns:
-        df_synthetic_conditional['Age'] = df_synthetic_conditional['Age'].clip(lower=18, upper=80) # Adjusted upper bound
-    if 'Blood_Glucose_mg/dL' in df_synthetic_conditional.columns:
-        df_synthetic_conditional['Blood_Glucose_mg/dL'] = df_synthetic_conditional['Blood_Glucose_mg/dL'].clip(lower=20, upper=700) # Adjusted bounds
-    if 'HbA1c_%' in df_synthetic_conditional.columns:
-        df_synthetic_conditional['HbA1c_%'] = df_synthetic_conditional['HbA1c_%'].clip(lower=3.0, upper=20.0) # Adjusted bounds
-    if 'BMI' in df_synthetic_conditional.columns:
-        df_synthetic_conditional['BMI'] = df_synthetic_conditional['BMI'].clip(lower=15, upper=50) # Adjusted bounds
+# Clip values to realistic ranges
+df_final_synthetic['Age'] = df_final_synthetic['Age'].clip(lower=18, upper=100)
+df_final_synthetic['Systolic_BP'] = df_final_synthetic['Systolic_BP'].clip(lower=80, upper=200)
+df_final_synthetic['Diastolic_BP'] = df_final_synthetic['Diastolic_BP'].clip(lower=50, upper=120)
+df_final_synthetic['BMI'] = df_final_synthetic['BMI'].clip(lower=15, upper=50)
+df_final_synthetic['Pulse rate'] = df_final_synthetic['Pulse rate'].clip(lower=40, upper=160)
+df_final_synthetic['HbA1c_%'] = df_final_synthetic['HbA1c_%'].clip(lower=3.0, upper=20.0)
+df_final_synthetic['Respiratory Rate'] = df_final_synthetic['Respiratory Rate'].clip(lower=10, upper=30)
+df_final_synthetic['Acetone PPM 1.1'] = df_final_synthetic['Acetone PPM 1.1'].clip(lower=0)
 
-    # Handle negative Breath Acetone in SYNTHETIC data
-    if BREATH_ACETONE_COLUMN in df_synthetic_conditional.columns:
-        neg_synth_acetone = (df_synthetic_conditional[BREATH_ACETONE_COLUMN] < 0).sum()
-        if neg_synth_acetone > 0:
-            # Option 1: Set to a small positive floor (e.g., 0 or 0.001) if NaNs are problematic later
-            df_synthetic_conditional.loc[df_synthetic_conditional[BREATH_ACETONE_COLUMN] < 0, BREATH_ACETONE_COLUMN] = 0.0
-            # Option 2: Set to NaN and then impute if preferred
-            # df_synthetic_conditional.loc[df_synthetic_conditional[BREATH_ACETONE_COLUMN] < 0, BREATH_ACETONE_COLUMN] = np.nan
-            print(f"Corrected {neg_synth_acetone} negative '{BREATH_ACETONE_COLUMN}' values in synthetic data (set to 0.0).")
+# Apply formatting for cleaner output
+df_final_synthetic['Age'] = df_final_synthetic['Age'].round(0).astype(int)
+df_final_synthetic['Systolic_BP'] = df_final_synthetic['Systolic_BP'].round(0).astype(int)
+df_final_synthetic['Diastolic_BP'] = df_final_synthetic['Diastolic_BP'].round(0).astype(int)
+df_final_synthetic['BMI'] = df_final_synthetic['BMI'].round(1)
+df_final_synthetic['Pulse rate'] = df_final_synthetic['Pulse rate'].round(0).astype(int)
+df_final_synthetic['Respiratory Rate'] = df_final_synthetic['Respiratory Rate'].round(0).astype(int)
+df_final_synthetic['Temperature'] = df_final_synthetic['Temperature'].round(1)
+df_final_synthetic['Humidity'] = df_final_synthetic['Humidity'].round(1)
+df_final_synthetic['HbA1c_%'] = df_final_synthetic['HbA1c_%'].round(1)
+df_final_synthetic['Acetone PPM 1.1'] = df_final_synthetic['Acetone PPM 1.1'].round(3)
 
-    # Handle negative β-Hydroxybutyrate in SYNTHETIC data
-    if BHB_COLUMN in df_synthetic_conditional.columns:
-        neg_synth_bhb = (df_synthetic_conditional[BHB_COLUMN] < 0).sum()
-        if neg_synth_bhb > 0:
-            df_synthetic_conditional.loc[df_synthetic_conditional[BHB_COLUMN] < 0, BHB_COLUMN] = 0.0
-            print(f"Corrected {neg_synth_bhb} negative '{BHB_COLUMN}' values in synthetic data (set to 0.0).")
-else:
-    print("Warning: Synthetic data is empty, skipping cleaning.")
+print("✅ Formatting complete.")
 
-
-# --- 6. Reclassify BGL and Compare to CTGAN Condition ---
-if not df_synthetic_conditional.empty and 'Blood_Glucose_mg/dL' in df_synthetic_conditional.columns:
-    df_synthetic_conditional['Predicted_Class_From_BGL'] = df_synthetic_conditional['Blood_Glucose_mg/dL'].apply(classify_glucose_level)
-    if 'Glucose_Level_Class' in df_synthetic_conditional.columns: # This is the conditioned column
-        df_synthetic_conditional['Condition_Match'] = df_synthetic_conditional['Glucose_Level_Class'] == df_synthetic_conditional['Predicted_Class_From_BGL']
-    else:
-        df_synthetic_conditional['Condition_Match'] = False # Should not happen if conditioned
-else:
-    df_synthetic_conditional['Condition_Match'] = False # Default if BGL column is missing
-
-# --- 7. Report Mismatch ---
-if not df_synthetic_conditional.empty and 'Condition_Match' in df_synthetic_conditional.columns:
-    print("\n🔍 Conditional Generation Match Analysis (Generated BGL vs. Conditioned Class):")
-    print(df_synthetic_conditional['Condition_Match'].value_counts(normalize=True).mul(100).round(2).astype(str) + '%')
-    mismatches = df_synthetic_conditional[~df_synthetic_conditional['Condition_Match']]
-    if not mismatches.empty:
-        print(f"\nFound {len(mismatches)} mismatches. Examples:")
-        print(mismatches[['Blood_Glucose_mg/dL', 'Glucose_Level_Class', 'Predicted_Class_From_BGL']].head())
-    else:
-        print("No mismatches found between conditioned class and re-classified BGL after cleaning.")
-
-# --- 8. Keep Only Matching Samples (Strict Mode) ---
-# This step ensures that the BGL values, after generation and clipping, still fall into the
-# category that was originally conditioned on.
-if not df_synthetic_conditional.empty and 'Condition_Match' in df_synthetic_conditional.columns:
-    df_cleaned_strict = df_synthetic_conditional[df_synthetic_conditional['Condition_Match']].copy()
-    print(f"\nApplied strict matching: Kept {len(df_cleaned_strict)} out of {len(df_synthetic_conditional)} synthetic samples.")
-else:
-    df_cleaned_strict = df_synthetic_conditional.copy() # Or an empty DataFrame if source is empty
-    print("\nSkipping strict matching or source data was empty.")
-
-columns_to_drop_from_final = ['Condition_Match', 'Predicted_Class_From_BGL']
-df_cleaned_strict.drop(columns=[col for col in columns_to_drop_from_final if col in df_cleaned_strict.columns], inplace=True, errors='ignore')
-
-
-# --- 9. Apply Column-Specific Formatting for Output ---
-print("\n⚙️ Formatting specific columns for CSV output...")
-if not df_cleaned_strict.empty:
-    if 'Age' in df_cleaned_strict.columns:
-        df_cleaned_strict['Age'] = df_cleaned_strict['Age'].round(0).astype(int)
-    if 'Fasting_Hours' in df_cleaned_strict.columns and pd.api.types.is_numeric_dtype(df_cleaned_strict['Fasting_Hours']):
-        df_cleaned_strict['Fasting_Hours'] = df_cleaned_strict['Fasting_Hours'].round(0).astype(int)
-    if 'Temp_C' in df_cleaned_strict.columns and pd.api.types.is_numeric_dtype(df_cleaned_strict['Temp_C']):
-        df_cleaned_strict['Temp_C'] = df_cleaned_strict['Temp_C'].round(1) # Temp often to 1 decimal
-    if 'Humidity_%' in df_cleaned_strict.columns and pd.api.types.is_numeric_dtype(df_cleaned_strict['Humidity_%']):
-        df_cleaned_strict['Humidity_%'] = df_cleaned_strict['Humidity_%'].round(0).astype(int)
-    if 'BMI' in df_cleaned_strict.columns:
-        df_cleaned_strict['BMI'] = df_cleaned_strict['BMI'].round(1)
-    if 'Blood_Glucose_mg/dL' in df_cleaned_strict.columns:
-        df_cleaned_strict['Blood_Glucose_mg/dL'] = df_cleaned_strict['Blood_Glucose_mg/dL'].round(1) # Often BGL is to 1 decimal or whole number
-    if 'HbA1c_%' in df_cleaned_strict.columns:
-        df_cleaned_strict['HbA1c_%'] = df_cleaned_strict['HbA1c_%'].round(1) # HbA1c often to 1 decimal
-    if BREATH_ACETONE_COLUMN in df_cleaned_strict.columns:
-        df_cleaned_strict[BREATH_ACETONE_COLUMN] = df_cleaned_strict[BREATH_ACETONE_COLUMN].round(3)
-    if BHB_COLUMN in df_cleaned_strict.columns:
-        df_cleaned_strict[BHB_COLUMN] = df_cleaned_strict[BHB_COLUMN].round(3)
-    print("✅ Formatting complete.")
-else:
-    print("Warning: df_cleaned_strict is empty, skipping formatting.")
-
-# --- Overall Missing Values Report for df_cleaned_strict (BEFORE Saving) ---
-print("\n📊 Overall Missing Values in df_cleaned_strict (after all processing, before saving):")
-if not df_cleaned_strict.empty:
-    missing_values_synthetic = df_cleaned_strict.isnull().sum()
-    missing_report_synthetic = pd.DataFrame({'Missing Values': missing_values_synthetic})
-    print(missing_report_synthetic[missing_report_synthetic['Missing Values'] > 0])
-    if missing_report_synthetic['Missing Values'].sum() == 0:
-        print("No missing values in final df_cleaned_strict.")
-else:
-    print("Warning: df_cleaned_strict is empty, cannot report missing values.")
-
-# --- 10. Save the Cleaned, Verified, and Formatted Synthetic Data ---
-output_filename = "../data/synthetic_data_ctgan_norm_conditional_verified_formatted.csv"
+# --- 10. Save the Final Synthetic Data ---
+output_filename = "../data/synthetic_data_final.csv"
 try:
-    if not df_cleaned_strict.empty:
-        df_cleaned_strict.to_csv(output_filename, index=False)
-        print(f"\n✅ Strictly verified, formatted, and normalized-then-inversed synthetic data saved to '{output_filename}'")
-    else:
-        print(f"\n⚠️ No data in df_cleaned_strict to save to '{output_filename}'. All samples may have been filtered out.")
+    df_final_synthetic.to_csv(output_filename, index=False)
+    print(f"\n✅ Final synthetic data saved to '{output_filename}'")
 except Exception as e:
-    print(f"\n❌ Error saving synthetic data: {e}")
+    print(f"\n❌ Error saving final synthetic data: {e}")
 
 # --- 11. Final Report ---
-print("NaNs in normalized synthetic acetone:", df_synthetic_normalized[BREATH_ACETONE_COLUMN].isnull().sum())
-print("Infinities in normalized synthetic acetone:", np.isinf(df_synthetic_normalized[BREATH_ACETONE_COLUMN]).sum())
-print("Describe normalized synthetic acetone:")
-print(df_synthetic_normalized[BREATH_ACETONE_COLUMN].describe())
-print("\n🧾 Final Verified and Formatted Synthetic Data Sample:")
-print(df_cleaned_strict.head())
+print("\n🧾 Final Synthetic Data Sample:")
+print(df_final_synthetic.head())
 
-if not df_cleaned_strict.empty and 'Glucose_Level_Class' in df_cleaned_strict.columns:
-    print("\n📊 Class Distribution (Final Verified Synthetic):")
-    print(df_cleaned_strict['Glucose_Level_Class'].value_counts(normalize=True).mul(100).round(2).astype(str) + '%')
+print("\n📊 Class Distribution (Final Synthetic Data):")
+print(
+    df_final_synthetic['Glucose_classification_class'].value_counts(normalize=True).mul(100).round(2).astype(str) + '%')
 
-print(f"\n📁 Final Verified Synthetic Data Shape: {df_cleaned_strict.shape}")
-if not df_real_for_training.empty:
-    print(f"Original data shape for CTGAN training (after dropna): {df_real_for_training.shape}")
-    if df_real_for_training.shape[0] > 0 and not df_cleaned_strict.empty:
-        print(f"\n Ratio of final verified synthetic samples to original training samples: {df_cleaned_strict.shape[0] / df_real_for_training.shape[0]:.2f}")
-
+print(f"\n📁 Final Synthetic Data Shape: {df_final_synthetic.shape}")
 print("\n🎉 Script finished.")
